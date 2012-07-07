@@ -149,11 +149,52 @@ class PrettyFormatter(object):
         self._print(repr(value))
 
 class Translator(object):
+    def _parse_name(self, name_node):
+        return '.'.join(scalar for scalar in name_node['parts'])
+
+    def translate_statement(self, node):
+        if node.type == 'Expr_Include':
+            include_string = node['expr']['value']
+            return ast.Import(names=[ast.alias(name=include_string, asname=None)])
+        elif node.type == 'Expr_Assign':
+            variable_name = node['var']['name']
+            value = self._translate_expression(node['expr'])
+            return ast.Assign(targets=[ast.Name(id=variable_name, ctx=ast.Store)], value=value)
+        elif node.type == 'Stmt_TryCatch':
+            body = [self.translate_statement(child) for child in node['stmts']]
+            except_handlers = []
+            for catch_node in node['catches']:
+                except_handlers.append(
+                    ast.ExceptHandler(
+                        type=ast.Str(self._parse_name(catch_node['type'])),
+                        name=ast.Str(catch_node['var']),
+                        body=[
+                            self.translate_statement(child)
+                            for child in catch_node['stmts']
+                        ],
+                    ),
+                )
+            return ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
+        elif node.type == 'Expr_Exit':
+            return ast.Expr(value=ast.Str('exit!'))
+        elif node.type == 'Stmt_Echo':
+            return ast.Print(
+                dest=None,
+                values=[self._translate_expression(child) for child in node['exprs']],
+                nl=True,
+            )
+        elif node.type.startswith('Expr_'):
+            return ast.Expr(self._translate_expression(node))
+        else:
+            #raise ValueError("don't know how to handle %r" % node.type)
+            print "don't know how to handle %r" % node.type
+            return ast.Expr(value=ast.Str('unknown %s' % node.type))
+
     def _parse_arguments(self, arg_nodes):
         arguments = []
         for arg_node in arg_nodes:
             assert not arg_node['byRef']
-            value = self.translate(arg_node['value'])
+            value = self._translate_expression(arg_node['value'])
             arguments.append(value)
         return arguments
 
@@ -167,38 +208,13 @@ class Translator(object):
             kwargs=None,
         )
 
-    def _parse_name(self, name_node):
-        return '.'.join(scalar for scalar in name_node['parts'])
-
-    def translate(self, node):
-        if node.type == 'Expr_Include':
-            include_string = node['expr']['value']
-            return ast.Import(names=[ast.alias(name=include_string, asname=None)])
-        elif node.type == 'Expr_Assign':
-            variable_name = node['var']['name']
-            value = self.translate(node['expr'])
-            return ast.Assign(targets=[ast.Name(id=variable_name, ctx=ast.Store)], value=value)
-        elif node.type == 'Expr_New':
+    def _translate_expression(self, node):
+        if node.type == 'Expr_New':
             return self._parse_call(node, 'class')
         elif node.type == 'Expr_FuncCall':
             return self._parse_call(node, 'name')
         elif node.type.startswith('Scalar_'):
-            return self.translate_scalar(node['value'])
-        elif node.type == 'Stmt_TryCatch':
-            body = [self.translate(child) for child in node['stmts']]
-            except_handlers = []
-            for catch_node in node['catches']:
-                except_handlers.append(
-                    ast.ExceptHandler(
-                        type=ast.Str(self._parse_name(catch_node['type'])),
-                        name=ast.Str(catch_node['var']),
-                        body=[
-                            self.translate(child)
-                            for child in catch_node['stmts']
-                        ],
-                    ),
-                )
-            return ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
+            return self._translate_scalar(node)
         elif node.type == 'Expr_MethodCall':
             target = node['var']['name']
             name = node['name']
@@ -215,26 +231,19 @@ class Translator(object):
             )
         elif node.type == 'Expr_Concat':
             return ast.BinOp(
-                left=self.translate(node['left']),
+                left=self._translate_expression(node['left']),
                 op=ast.Add(),
-                right=self.translate(node['right']),
+                right=self._translate_expression(node['right']),
             )
-        elif node.type == 'Expr_Exit':
-            return ast.Expr(value=ast.Str('exit!'))
         elif node.type == 'Expr_Variable':
             return ast.Name(id=node['name'], ctx=ast.Load)
-        elif node.type == 'Stmt_Echo':
-            return ast.Print(
-                dest=None,
-                values=[self.translate(child) for child in node['exprs']],
-                nl=True,
-            )
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
-            print "don't know how to handle %r" % node.type
-            return ast.Expr(value=ast.Str('unknown %s' % node.type))
+            print "don't know how to handle expression %r" % node.type
+            return ast.Str('unknown expr %s' % node.type)
 
-    def translate_scalar(self, value):
+    def _translate_scalar(self, node):
+        value = node['value']
         if isinstance(value, basestring):
             return ast.Str(value)
         elif isinstance(value, (bool, types.NoneType)):
@@ -254,7 +263,7 @@ def main():
     print '----'
 
     translator = Translator()
-    statements = [translator.translate(statement) for statement in statements]
+    statements = [translator.translate_statement(statement) for statement in statements]
     module = ast.Module(body=statements)
     print ast.dump(module)
     print '----'
