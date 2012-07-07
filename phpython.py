@@ -123,7 +123,7 @@ class PrettyFormatter(object):
             self._format_scalar(thing)
 
     def _format_node(self, node):
-        self._print(node.type + ' {\n')
+        self._print('%s (%s) {\n' % (node.type, ', '.join(name for name, value in node.subnodes())))
         with self._indent(2):
             for key, value in node.subnodes():
                 self._print(key + ': ')
