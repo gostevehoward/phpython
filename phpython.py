@@ -2,6 +2,7 @@
 
 import ast
 import contextlib
+import itertools
 import os
 import pprint
 import subprocess
@@ -165,7 +166,18 @@ class Translator(object):
             kwargs=None,
         )
 
-    def translate_statement(self, node):
+    def _translate_statements(self, statements):
+        return [self._translate_statement(statement) for statement in statements]
+
+    def translate(self, node):
+        if node.type == 'Stmt_Namespace':
+            name = self._parse_name(node['name'])
+            # TODO: assert on name
+            return self._translate_statements(node['stmts'])
+        else:
+            return [self._translate_statement(node)]
+
+    def _translate_statement(self, node):
         if node.type == 'Expr_Include':
             include_string = node['expr']['value']
             return ast.Import(names=[ast.alias(name=include_string, asname=None)])
@@ -174,34 +186,29 @@ class Translator(object):
             value = self._translate_expression(node['expr'])
             return ast.Assign(targets=[ast.Name(id=variable_name, ctx=ast.Store)], value=value)
         elif node.type == 'Stmt_TryCatch':
-            body = [self.translate_statement(child) for child in node['stmts']]
+            body = self._translate_statements(node['stmts'])
             except_handlers = []
             for catch_node in node['catches']:
                 except_handlers.append(
                     ast.ExceptHandler(
                         type=ast.Str(self._parse_name(catch_node['type'])),
                         name=ast.Str(catch_node['var']),
-                        body=[
-                            self.translate_statement(child)
-                            for child in catch_node['stmts']
-                        ],
+                        body=self._translate_statements(catch_node['stmts']),
                     ),
                 )
             return ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
         elif node.type == 'Expr_Exit':
             return ast.Expr(self._method_call('sys', 'exit', []))
+        elif node.type == 'Stmt_Use':
+            return ast.Expr(ast.Str('Ignoring use: %s' % self._parse_name(node['uses'][0]['name'])))
         elif node.type == 'Stmt_Echo':
             return ast.Print(
                 dest=None,
                 values=[self._translate_expression(child) for child in node['exprs']],
                 nl=True,
             )
-        elif node.type.startswith('Expr_'):
-            return ast.Expr(self._translate_expression(node))
         else:
-            #raise ValueError("don't know how to handle %r" % node.type)
-            print "don't know how to handle %r" % node.type
-            return ast.Expr(value=ast.Str('unknown %s' % node.type))
+            return ast.Expr(self._translate_expression(node))
 
     def _parse_arguments(self, arg_nodes):
         arguments = []
@@ -242,8 +249,8 @@ class Translator(object):
             return ast.Name(id=node['name'], ctx=ast.Load)
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
-            print "don't know how to handle expression %r" % node.type
-            return ast.Str('unknown expr %s' % node.type)
+            print "don't know how to handle %r" % node.type
+            return ast.Str('unknown %r' % node.type)
 
     def _translate_scalar(self, node):
         value = node['value']
@@ -266,7 +273,7 @@ def main():
     print '----'
 
     translator = Translator()
-    statements = [translator.translate_statement(statement) for statement in statements]
+    statements = list(itertools.chain(translator.translate(statement) for statement in statements))
     module = ast.Module(body=statements)
     print ast.dump(module)
     print '----'
