@@ -152,6 +152,19 @@ class Translator(object):
     def _parse_name(self, name_node):
         return '.'.join(scalar for scalar in name_node['parts'])
 
+    def _method_call(self, object_name, function_name, args):
+        return ast.Call(
+            func=ast.Attribute(
+                value=ast.Name(id=object_name, ctx=ast.Load),
+                attr=function_name,
+                ctx=ast.Load,
+            ),
+            args=args,
+            keywords=[],
+            starargs=None,
+            kwargs=None,
+        )
+
     def translate_statement(self, node):
         if node.type == 'Expr_Include':
             include_string = node['expr']['value']
@@ -176,7 +189,7 @@ class Translator(object):
                 )
             return ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
         elif node.type == 'Expr_Exit':
-            return ast.Expr(value=ast.Str('exit!'))
+            return ast.Expr(self._method_call('sys', 'exit', []))
         elif node.type == 'Stmt_Echo':
             return ast.Print(
                 dest=None,
@@ -218,17 +231,7 @@ class Translator(object):
         elif node.type == 'Expr_MethodCall':
             target = node['var']['name']
             name = node['name']
-            return ast.Call(
-                func=ast.Attribute(
-                    value=ast.Name(id=target, ctx=ast.Load),
-                    attr=name,
-                    ctx=ast.Load,
-                ),
-                args=self._parse_arguments(node['args']),
-                keywords=[],
-                starargs=None,
-                kwargs=None,
-            )
+            return self._method_call(target, name, self._parse_arguments(node['args']))
         elif node.type == 'Expr_Concat':
             return ast.BinOp(
                 left=self._translate_expression(node['left']),
