@@ -343,6 +343,7 @@ class Translator(object):
         elif node.type == 'Scalar_Int':
             return ast.Num(node['value'])
         else:
+            print "don't know how to handle %r" % node.type
             return ast.Str('unknown scalar %r' % node.type)
 
 def main():
