@@ -349,6 +349,17 @@ class Translator(object):
             )
         elif node.type == 'Expr_ConstFetch':
             return self._build_lookup(node['name'])
+        elif node.type == 'Expr_ClassConstFetch':
+            return ast.Attribute(
+                value=self._build_lookup(node['class']),
+                attr=node['name'],
+            )
+        elif node.type == 'Expr_Ternary':
+            return ast.IfExp(
+                test=self._translate_expression(node['cond']),
+                body=self._translate_expression(node['if']),
+                orelse=self._translate_expression(node['else']),
+            )
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
