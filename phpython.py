@@ -31,6 +31,9 @@ class Node(object):
     def subnodes(self):
         return self._subnode_map.iteritems()
 
+    def __repr__(self):
+        return 'Node(%s)' % self.type
+
 def remove_namespace(tag):
     return tag.rpartition('}')[2]
 
@@ -150,16 +153,20 @@ class PrettyFormatter(object):
         self._print(repr(value))
 
 class Translator(object):
-    def _parse_name(self, name_node):
-        return '.'.join(scalar for scalar in name_node['parts'])
-
     def _name(self, name):
         return ast.Name(id=name)
 
-    def _method_call(self, object_name, function_name, args):
+    def _build_lookup(self, name):
+        assert name.type in ('Name', 'Name_FullyQualified')
+        expression = self._name(name['parts'][0])
+        for part in name['parts'][1:]:
+            expression = ast.Attribute(value=expression, attr=part)
+        return expression
+
+    def _method_call(self, object_expression, function_name, args):
         return ast.Call(
             func=ast.Attribute(
-                value=self._name(object_name),
+                value=object_expression,
                 attr=function_name,
             ),
             args=args,
@@ -169,9 +176,13 @@ class Translator(object):
         )
 
     def translate_statements(self, statements):
-        return list(itertools.chain.from_iterable(
+        results = list(itertools.chain.from_iterable(
             self._translate_statement(statement) for statement in statements
         ))
+        if results:
+            return results
+        else:
+            return ast.Pass()
 
     def _translate_params(self, params):
         names, defaults = [], []
@@ -185,8 +196,7 @@ class Translator(object):
 
     def _translate_statement(self, node):
         if node.type == 'Stmt_Namespace':
-            name = self._parse_name(node['name'])
-            # TODO: assert on name
+            # TODO: assert on node['name']['parts']
             for statement in self.translate_statements(node['stmts']):
                 yield statement
         elif node.type == 'Expr_Include':
@@ -202,16 +212,16 @@ class Translator(object):
             for catch_node in node['catches']:
                 except_handlers.append(
                     ast.ExceptHandler(
-                        type=ast.Str(self._parse_name(catch_node['type'])),
-                        name=ast.Str(catch_node['var']),
+                        type=self._build_lookup(catch_node['type']),
+                        name=self._name(catch_node['var']),
                         body=self.translate_statements(catch_node['stmts']),
                     ),
                 )
             yield ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
         elif node.type == 'Expr_Exit':
-            yield ast.Expr(self._method_call('sys', 'exit', []))
+            yield ast.Expr(self._method_call(self._name('sys'), 'exit', []))
         elif node.type == 'Stmt_Use':
-            yield  ast.Expr(ast.Str('Ignoring use: %s' % self._parse_name(node['uses'][0]['name'])))
+            yield ast.Expr(ast.Str('Ignoring use: %s' % '.'.join(node['uses'][0]['name']['parts'])))
         elif node.type == 'Stmt_Echo':
             yield ast.Print(
                 dest=None,
@@ -219,13 +229,13 @@ class Translator(object):
                 nl=True,
             )
         elif node.type == 'Stmt_Class':
-            implements = [self._parse_name(child) for child in node['implements']]
-            extends = self._parse_name(node['extends'])
+            implements = [self._build_lookup(child) for child in node['implements']]
+            extends = self._build_lookup(node['extends'])
             name = node['name']
             assert node['type'] == 0
             yield ast.ClassDef(
                 name=node['name'],
-                bases=[self._name(name) for name in [extends] + implements],
+                bases=[extends] + implements,
                 body=self.translate_statements(node['stmts']),
                 decorator_list=[],
             )
@@ -264,6 +274,10 @@ class Translator(object):
                 body=self.translate_statements(node['stmts']),
                 orelse=[],
             )
+        elif node.type == 'Stmt_Break':
+            if node['num']: # TODO
+                print 'WARNING: break with number!'
+            yield ast.Break()
         else:
             yield ast.Expr(self._translate_expression(node))
 
@@ -276,9 +290,9 @@ class Translator(object):
         return arguments
 
     def _parse_call(self, node, name_tag):
-        callable_name = self._parse_name(node[name_tag])
+        callable_expression = self._build_lookup(node[name_tag])
         return ast.Call(
-            func=self._name(callable_name),
+            func=callable_expression,
             args=self._parse_arguments(node['args']),
             keywords=[],
             starargs=None,
@@ -293,7 +307,7 @@ class Translator(object):
         elif node.type.startswith('Scalar_'):
             return self._translate_scalar(node)
         elif node.type == 'Expr_MethodCall':
-            target = node['var']['name']
+            target = self._translate_expression(node['var'])
             name = node['name']
             return self._method_call(target, name, self._parse_arguments(node['args']))
         elif node.type == 'Expr_Concat':
@@ -308,14 +322,14 @@ class Translator(object):
             return ast.Attribute(value=self._translate_expression(node['var']), attr=node['name'])
         elif node.type == 'Expr_StaticCall':
             return self._method_call(
-                self._parse_name(node['class']),
+                self._build_lookup(node['class']),
                 node['name'],
                 self._parse_arguments(node['args']),
             )
         elif node.type == 'Expr_NotIdentical':
             return ast.Compare(
                 left=self._translate_expression(node['left']),
-                ops=[ast.IsNot()],
+                ops=[ast.NotEq()],
                 comparators=[self._translate_expression(node['right'])],
             )
         elif node.type == 'Expr_Array':
@@ -328,6 +342,13 @@ class Translator(object):
                 return ast.Dict(keys=keys, values=values)
             else:
                 return ast.List(elts=[value for key, value in items])
+        elif node.type == 'Expr_ArrayDimFetch':
+            return ast.Subscript(
+                value=self._translate_expression(node['var']),
+                slice=ast.Index(value=self._translate_expression(node['dim'])),
+            )
+        elif node.type == 'Expr_ConstFetch':
+            return self._build_lookup(node['name'])
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
@@ -340,8 +361,23 @@ class Translator(object):
             return self._name('True' if node['value'] else 'False')
         elif node.type == 'Scalar_Null':
             self.self._name('None')
-        elif node.type == 'Scalar_Int':
+        elif node.type == 'Scalar_LNumber':
             return ast.Num(node['value'])
+        elif node.type == 'Scalar_Encapsed':
+            sum_ast = None
+            for part in node['parts']:
+                if isinstance(part, Node):
+                    expression = self._translate_expression(part)
+                elif isinstance(part, basestring):
+                    expression = ast.Str(part)
+                else:
+                    raise ValueError('Unexpected part in Scalar_Encapsed: %r' % part)
+
+                if sum_ast is None:
+                    sum_ast = expression
+                else:
+                    sum_ast = ast.BinOp(left=sum_ast, op=ast.Add(), right=expression)
+            return sum_ast
         else:
             print "don't know how to handle %r" % node.type
             return ast.Str('unknown scalar %r' % node.type)

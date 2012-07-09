@@ -42,7 +42,11 @@ class Unparser:
 
     def write(self, text):
         "Append a piece of text to the current line."
-        self.f.write(text)
+        try:
+            self.f.write(text)
+        except TypeError:
+            print repr(text)
+            raise
 
     def enter(self):
         "Print ':', and increase the indentation."
