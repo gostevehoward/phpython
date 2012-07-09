@@ -208,9 +208,9 @@ class Translator(object):
             include_string = node['expr']['value']
             yield ast.Import(names=[ast.alias(name=include_string, asname=None)])
         elif node.type == 'Expr_Assign':
-            variable_name = node['var']['name']
+            target = self._translate_expression(node['var'])
             value = self._translate_expression(node['expr'])
-            yield ast.Assign(targets=[self._name(variable_name)], value=value)
+            yield ast.Assign(targets=[target], value=value)
         elif node.type == 'Stmt_TryCatch':
             body = self.translate_statements(node['stmts'])
             except_handlers = []
@@ -234,24 +234,30 @@ class Translator(object):
                 nl=True,
             )
         elif node.type == 'Stmt_Class':
-            implements = [self._build_lookup(child) for child in node['implements']]
-            extends = self._build_lookup(node['extends'])
+            bases = [self._build_lookup(node['extends'])] if node['extends'] else []
+            bases.extend([self._build_lookup(child) for child in node['implements']])
+            if not bases:
+                bases = [self._name('object')]
             name = node['name']
             assert node['type'] == 0
             yield ast.ClassDef(
                 name=node['name'],
-                bases=[extends] + implements,
+                bases=bases,
                 body=self.translate_statements(node['stmts']),
                 decorator_list=[],
             )
         elif node.type == 'Stmt_Property':
-            assert node['type'] == 2
+            #assert node['type'] == 2 TODO
             for child in node['props']:
-                value = self._translate_expression(child['default'])
+                value = (
+                    self._translate_expression(child['default'])
+                    if child['default']
+                    else self._name('None')
+                )
                 yield ast.Assign(targets=[self._name(child['name'])], value=value)
         elif node.type == 'Stmt_ClassMethod':
             assert not node['byRef']
-            assert node['type'] == 2
+            #assert node['type'] == 2 TODO
             yield ast.FunctionDef(
                 name=node['name'],
                 args=self._translate_params(node['params'], add_self=True),
@@ -261,20 +267,29 @@ class Translator(object):
         elif node.type == 'Stmt_Return':
             yield ast.Return(value=self._translate_expression(node['expr']))
         elif node.type == 'Stmt_If':
+            else_body = []
             for if_node in node['elseifs']:
                 assert False # TODO
             if node['else']:
-                assert False # TODO
+                assert node['else'].type == 'Stmt_Else'
+                else_body.extend(self.translate_statements(node['else']['stmts']))
             yield ast.If(
                 test=self._translate_expression(node['cond']),
                 body=self.translate_statements(node['stmts']),
-                orelse=[], # TODO
+                orelse=else_body,
             )
         elif node.type == 'Stmt_Foreach':
             assert not node['byRef']
-            assert not node['keyVar']
+            value_expression = self._translate_expression(node['valueVar'])
+            if node['keyVar']:
+                target = ast.Tuple(elts=[
+                    self._translate_expression(node['keyVar']),
+                    value_expression,
+                ])
+            else:
+                target = value_expression
             yield ast.For(
-                target=self._translate_expression(node['valueVar']),
+                target=target,
                 iter=self._translate_expression(node['expr']),
                 body=self.translate_statements(node['stmts']),
                 orelse=[],
@@ -346,11 +361,15 @@ class Translator(object):
             if any(keys):
                 return ast.Dict(keys=keys, values=values)
             else:
-                return ast.List(elts=[value for key, value in items])
+                return ast.List(elts=values)
         elif node.type == 'Expr_ArrayDimFetch':
+            if node['dim']:
+                index = ast.Index(value=self._translate_expression(node['dim']))
+            else:
+                index = ast.Index(value=ast.Num(-1)) # TODO
             return ast.Subscript(
                 value=self._translate_expression(node['var']),
-                slice=ast.Index(value=self._translate_expression(node['dim'])),
+                slice=index,
             )
         elif node.type == 'Expr_ConstFetch':
             return self._build_lookup(node['name'])
@@ -360,11 +379,12 @@ class Translator(object):
                 attr=node['name'],
             )
         elif node.type == 'Expr_Ternary':
-            return ast.IfExp(
-                test=self._translate_expression(node['cond']),
-                body=self._translate_expression(node['if']),
-                orelse=self._translate_expression(node['else']),
-            )
+            test = self._translate_expression(node['cond'])
+            if node['if']:
+                body = self._translate_expression(node['if'])
+            else:
+                body = test
+            return ast.IfExp(test=test, body=body, orelse=self._translate_expression(node['else']))
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
