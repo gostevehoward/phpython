@@ -243,6 +243,27 @@ class Translator(object):
                 body=self.translate_statements(node['stmts']),
                 decorator_list=[],
             )
+        elif node.type == 'Stmt_Return':
+            yield ast.Return(value=self._translate_expression(node['expr']))
+        elif node.type == 'Stmt_If':
+            for if_node in node['elseifs']:
+                assert False # TODO
+            if node['else']:
+                assert False # TODO
+            yield ast.If(
+                test=self._translate_expression(node['cond']),
+                body=self.translate_statements(node['stmts']),
+                orelse=[], # TODO
+            )
+        elif node.type == 'Stmt_Foreach':
+            assert not node['byRef']
+            assert not node['keyVar']
+            yield ast.For(
+                target=self._translate_expression(node['valueVar']),
+                iter=self._translate_expression(node['expr']),
+                body=self.translate_statements(node['stmts']),
+                orelse=[],
+            )
         else:
             yield ast.Expr(self._translate_expression(node))
 
@@ -283,21 +304,46 @@ class Translator(object):
             )
         elif node.type == 'Expr_Variable':
             return self._name(node['name'])
+        elif node.type == 'Expr_PropertyFetch':
+            return ast.Attribute(value=self._translate_expression(node['var']), attr=node['name'])
+        elif node.type == 'Expr_StaticCall':
+            return self._method_call(
+                self._parse_name(node['class']),
+                node['name'],
+                self._parse_arguments(node['args']),
+            )
+        elif node.type == 'Expr_NotIdentical':
+            return ast.Compare(
+                left=self._translate_expression(node['left']),
+                ops=[ast.IsNot()],
+                comparators=[self._translate_expression(node['right'])],
+            )
+        elif node.type == 'Expr_Array':
+            keys, values = [], []
+            for item in node['items']:
+                assert not item['byRef']
+                keys.append(self._translate_expression(item['key']))
+                values.append(self._translate_expression(item['value']))
+            if any(keys):
+                return ast.Dict(keys=keys, values=values)
+            else:
+                return ast.List(elts=[value for key, value in items])
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
             return ast.Str('unknown %r' % node.type)
 
     def _translate_scalar(self, node):
-        value = node['value']
-        if isinstance(value, basestring):
-            return ast.Str(value)
-        elif isinstance(value, (bool, types.NoneType)):
-            return self._name(repr(value))
-        elif isinstance(value, int):
-            return ast.Num(value)
+        if node.type == 'Scalar_String':
+            return ast.Str(node['value'])
+        elif node.type == 'Scalar_Bool':
+            return self._name('True' if node['value'] else 'False')
+        elif node.type == 'Scalar_Null':
+            self.self._name('None')
+        elif node.type == 'Scalar_Int':
+            return ast.Num(node['value'])
         else:
-            return ast.Str('unknown scalar %r' % value)
+            return ast.Str('unknown scalar %r' % node.type)
 
 def main():
     parser = XmlPhpParseTreeReader()
