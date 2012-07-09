@@ -154,6 +154,8 @@ class PrettyFormatter(object):
 
 class Translator(object):
     def _name(self, name):
+        if name == 'this':
+            name = 'self'
         return ast.Name(id=name)
 
     def _build_lookup(self, name):
@@ -184,8 +186,11 @@ class Translator(object):
         else:
             return ast.Pass()
 
-    def _translate_params(self, params):
+    def _translate_params(self, params, add_self=False):
         names, defaults = [], []
+        if add_self:
+            names.append(self._name('self'))
+            defaults.append(None)
         for param in params:
             assert not param['byRef']
             names.append(self._name(param['name']))
@@ -249,7 +254,7 @@ class Translator(object):
             assert node['type'] == 2
             yield ast.FunctionDef(
                 name=node['name'],
-                args=self._translate_params(node['params']),
+                args=self._translate_params(node['params'], add_self=True),
                 body=self.translate_statements(node['stmts']),
                 decorator_list=[],
             )
