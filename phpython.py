@@ -153,12 +153,14 @@ class Translator(object):
     def _parse_name(self, name_node):
         return '.'.join(scalar for scalar in name_node['parts'])
 
+    def _name(self, name):
+        return ast.Name(id=name)
+
     def _method_call(self, object_name, function_name, args):
         return ast.Call(
             func=ast.Attribute(
-                value=ast.Name(id=object_name, ctx=ast.Load),
+                value=self._name(object_name),
                 attr=function_name,
-                ctx=ast.Load,
             ),
             args=args,
             keywords=[],
@@ -166,49 +168,83 @@ class Translator(object):
             kwargs=None,
         )
 
-    def _translate_statements(self, statements):
-        return [self._translate_statement(statement) for statement in statements]
+    def translate_statements(self, statements):
+        return list(itertools.chain.from_iterable(
+            self._translate_statement(statement) for statement in statements
+        ))
 
-    def translate(self, node):
+    def _translate_params(self, params):
+        names, defaults = [], []
+        for param in params:
+            assert not param['byRef']
+            names.append(self._name(param['name']))
+            defaults.append(
+                self._translate_expression(param['default']) if param['default'] else None
+            )
+        return ast.arguments(args=names, vararg=None, kwarg=None, defaults=defaults)
+
+    def _translate_statement(self, node):
         if node.type == 'Stmt_Namespace':
             name = self._parse_name(node['name'])
             # TODO: assert on name
-            return self._translate_statements(node['stmts'])
-        else:
-            return [self._translate_statement(node)]
-
-    def _translate_statement(self, node):
-        if node.type == 'Expr_Include':
+            for statement in self.translate_statements(node['stmts']):
+                yield statement
+        elif node.type == 'Expr_Include':
             include_string = node['expr']['value']
-            return ast.Import(names=[ast.alias(name=include_string, asname=None)])
+            yield ast.Import(names=[ast.alias(name=include_string, asname=None)])
         elif node.type == 'Expr_Assign':
             variable_name = node['var']['name']
             value = self._translate_expression(node['expr'])
-            return ast.Assign(targets=[ast.Name(id=variable_name, ctx=ast.Store)], value=value)
+            yield ast.Assign(targets=[self._name(variable_name)], value=value)
         elif node.type == 'Stmt_TryCatch':
-            body = self._translate_statements(node['stmts'])
+            body = self.translate_statements(node['stmts'])
             except_handlers = []
             for catch_node in node['catches']:
                 except_handlers.append(
                     ast.ExceptHandler(
                         type=ast.Str(self._parse_name(catch_node['type'])),
                         name=ast.Str(catch_node['var']),
-                        body=self._translate_statements(catch_node['stmts']),
+                        body=self.translate_statements(catch_node['stmts']),
                     ),
                 )
-            return ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
+            yield ast.TryExcept(body=body, handlers=except_handlers, orelse=[])
         elif node.type == 'Expr_Exit':
-            return ast.Expr(self._method_call('sys', 'exit', []))
+            yield ast.Expr(self._method_call('sys', 'exit', []))
         elif node.type == 'Stmt_Use':
-            return ast.Expr(ast.Str('Ignoring use: %s' % self._parse_name(node['uses'][0]['name'])))
+            yield  ast.Expr(ast.Str('Ignoring use: %s' % self._parse_name(node['uses'][0]['name'])))
         elif node.type == 'Stmt_Echo':
-            return ast.Print(
+            yield ast.Print(
                 dest=None,
                 values=[self._translate_expression(child) for child in node['exprs']],
                 nl=True,
             )
+        elif node.type == 'Stmt_Class':
+            implements = [self._parse_name(child) for child in node['implements']]
+            extends = self._parse_name(node['extends'])
+            name = node['name']
+            assert node['type'] == 0
+            yield ast.ClassDef(
+                name=node['name'],
+                bases=[self._name(name) for name in [extends] + implements],
+                body=self.translate_statements(node['stmts']),
+                decorator_list=[],
+            )
+        elif node.type == 'Stmt_Property':
+            assert node['type'] == 2
+            for child in node['props']:
+                value = self._translate_expression(child['default'])
+                yield ast.Assign(targets=[self._name(child['name'])], value=value)
+        elif node.type == 'Stmt_ClassMethod':
+            assert not node['byRef']
+            assert node['type'] == 2
+            yield ast.FunctionDef(
+                name=node['name'],
+                args=self._translate_params(node['params']),
+                body=self.translate_statements(node['stmts']),
+                decorator_list=[],
+            )
         else:
-            return ast.Expr(self._translate_expression(node))
+            yield ast.Expr(self._translate_expression(node))
 
     def _parse_arguments(self, arg_nodes):
         arguments = []
@@ -221,7 +257,7 @@ class Translator(object):
     def _parse_call(self, node, name_tag):
         callable_name = self._parse_name(node[name_tag])
         return ast.Call(
-            func=ast.Name(id=callable_name, ctx=ast.Load),
+            func=self._name(callable_name),
             args=self._parse_arguments(node['args']),
             keywords=[],
             starargs=None,
@@ -246,7 +282,7 @@ class Translator(object):
                 right=self._translate_expression(node['right']),
             )
         elif node.type == 'Expr_Variable':
-            return ast.Name(id=node['name'], ctx=ast.Load)
+            return self._name(node['name'])
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
@@ -257,7 +293,7 @@ class Translator(object):
         if isinstance(value, basestring):
             return ast.Str(value)
         elif isinstance(value, (bool, types.NoneType)):
-            return ast.Name(id=repr(value), ctx=ast.Load)
+            return self._name(repr(value))
         elif isinstance(value, int):
             return ast.Num(value)
         else:
@@ -273,8 +309,8 @@ def main():
     print '----'
 
     translator = Translator()
-    statements = list(itertools.chain(translator.translate(statement) for statement in statements))
-    module = ast.Module(body=statements)
+    translated_statements = translator.translate_statements(statements)
+    module = ast.Module(body=translated_statements)
     print ast.dump(module)
     print '----'
     unparse.Unparser(module)
