@@ -385,6 +385,12 @@ class Translator(object):
             else:
                 body = test
             return ast.IfExp(test=test, body=body, orelse=self._translate_expression(node['else']))
+        elif node.type == 'Expr_Equal':
+            return ast.Compare(
+                left=self._translate_expression(node['left']),
+                ops=[ast.Eq()],
+                comparators=[self._translate_expression(node['right'])],
+            )
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
