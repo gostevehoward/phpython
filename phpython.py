@@ -178,11 +178,10 @@ class Translator(object):
         )
 
     def translate_statements(self, statements):
-        results = list(itertools.chain.from_iterable(
-            self._translate_statement(statement) for statement in statements
-        ))
-        if results:
-            return results
+        if statements:
+            return list(itertools.chain.from_iterable(
+                self._translate_statement(statement) for statement in statements
+            ))
         else:
             return ast.Pass()
 
@@ -246,6 +245,17 @@ class Translator(object):
                 body=self.translate_statements(node['stmts']),
                 decorator_list=[],
             )
+        elif node.type == 'Stmt_Interface':
+            # TODO: combine with class
+            bases = [self._build_lookup(child) for child in node['extends']]
+            if not bases:
+                bases = [self._name('object')]
+            yield ast.ClassDef(
+                name= node['name'],
+                bases=bases,
+                body=self.translate_statements(node['stmts']),
+                decorator_list=[],
+            )
         elif node.type == 'Stmt_Property':
             #assert node['type'] == 2 TODO
             for child in node['props']:
@@ -298,6 +308,42 @@ class Translator(object):
             if node['num']: # TODO
                 print 'WARNING: break with number!'
             yield ast.Break()
+        elif node.type == 'Expr_Assign':
+            yield ast.Assign(
+                targets=[self._translate_expression(node['var'])],
+                value=self._translate_expression(node['expr']),
+            )
+        elif node.type == 'Expr_AssignConcat':
+            yield ast.AugAssign(
+                target=self._translate_expression(node['var']),
+                op=ast.Add(),
+                value=self._translate_expression(node['expr']),
+            )
+        elif node.type == 'Stmt_Throw':
+            yield ast.Raise(
+                type=self._translate_expression(node['expr']),
+                inst=None,
+                tback=None,
+            )
+        elif node.type == 'Stmt_ClassConst':
+            for const_node in node['consts']:
+                yield ast.Assign(
+                    targets=[self._name(const_node['name'])],
+                    value=self._translate_expression(const_node['value']),
+                )
+        elif node.type == 'Stmt_Switch':
+            value = self._translate_expression(node['cond'])
+            for case_node in node['cases']:
+                # TODO: use elses properly
+                yield ast.If(
+                    test=ast.Compare(
+                        left=value,
+                        ops=[ast.Eq()],
+                        comparators=[self._translate_expression(case_node['cond'])],
+                    ),
+                    body=self.translate_statements(case_node['stmts']),
+                    orelse=[],
+                )
         else:
             yield ast.Expr(self._translate_expression(node))
 
@@ -319,8 +365,45 @@ class Translator(object):
             kwargs=None,
         )
 
+    BINARY_OPERATIONS = {
+        'Expr_Concat': ast.Add(),
+        'Expr_BitwiseOr': ast.BitOr(),
+        'Expr_Plus': ast.Add(),
+        'Expr_Minus': ast.Sub(),
+    }
+
+    COMPARE_OPERATIONS = {
+        'Expr_Identical': ast.Eq(),
+        'Expr_NotIdentical': ast.NotEq(),
+        'Expr_Equal': ast.Eq(),
+    }
+
+    BOOLEAN_OPERATIONS = {
+        'Expr_BooleanOr': ast.Or(),
+    }
+
     def _translate_expression(self, node):
-        if node.type == 'Expr_New':
+        if node.type in self.BINARY_OPERATIONS:
+            return ast.BinOp(
+                left=self._translate_expression(node['left']),
+                op=self.BINARY_OPERATIONS[node.type],
+                right=self._translate_expression(node['right']),
+            )
+        elif node.type in self.COMPARE_OPERATIONS:
+            return ast.Compare(
+                left=self._translate_expression(node['left']),
+                ops=[self.COMPARE_OPERATIONS[node.type]],
+                comparators=[self._translate_expression(node['right'])],
+            )
+        elif node.type in self.BOOLEAN_OPERATIONS:
+            return ast.BoolOp(
+                op=self.BOOLEAN_OPERATIONS[node.type],
+                values=[
+                    self._translate_expression(node['left']),
+                    self._translate_expression(node['right']),
+                ],
+            )
+        elif node.type == 'Expr_New':
             return self._parse_call(node, 'class')
         elif node.type == 'Expr_FuncCall':
             return self._parse_call(node, 'name')
@@ -330,12 +413,6 @@ class Translator(object):
             target = self._translate_expression(node['var'])
             name = node['name']
             return self._method_call(target, name, self._parse_arguments(node['args']))
-        elif node.type == 'Expr_Concat':
-            return ast.BinOp(
-                left=self._translate_expression(node['left']),
-                op=ast.Add(),
-                right=self._translate_expression(node['right']),
-            )
         elif node.type == 'Expr_Variable':
             return self._name(node['name'])
         elif node.type == 'Expr_PropertyFetch':
@@ -345,12 +422,6 @@ class Translator(object):
                 self._build_lookup(node['class']),
                 node['name'],
                 self._parse_arguments(node['args']),
-            )
-        elif node.type == 'Expr_NotIdentical':
-            return ast.Compare(
-                left=self._translate_expression(node['left']),
-                ops=[ast.NotEq()],
-                comparators=[self._translate_expression(node['right'])],
             )
         elif node.type == 'Expr_Array':
             keys, values = [], []
@@ -385,12 +456,8 @@ class Translator(object):
             else:
                 body = test
             return ast.IfExp(test=test, body=body, orelse=self._translate_expression(node['else']))
-        elif node.type == 'Expr_Equal':
-            return ast.Compare(
-                left=self._translate_expression(node['left']),
-                ops=[ast.Eq()],
-                comparators=[self._translate_expression(node['right'])],
-            )
+        elif node.type == 'Expr_BooleanNot':
+            return ast.UnaryOp(op=ast.Not(), operand=self._translate_expression(node['expr']))
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
             print "don't know how to handle %r" % node.type
