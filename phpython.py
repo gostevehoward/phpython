@@ -15,7 +15,7 @@ from xml.etree import ElementTree
 
 import unparse
 
-PARSE_PHP_SCRIPT = os.path.join(os.getcwd(), 'parse.php')
+PARSE_PHP_SCRIPT = os.path.join(os.path.dirname(__file__), 'parse.php')
 NS_NODE = '{http://nikic.github.com/PHPParser/XML/node}'
 NS_SUBNODE = '{http://nikic.github.com/PHPParser/XML/subNode}'
 NS_ATTRIBUTE = '{http://nikic.github.com/PHPParser/XML/attribute}'
@@ -34,6 +34,12 @@ class Node(object):
 
     def __repr__(self):
         return 'Node(%s)' % self.type
+
+    def dump(self):
+        return 'Node(%s, %s)' % (
+            self.type,
+            ', '.join('%s=%s' % (key, value) for key, value in self._subnode_map.iteritems()),
+        )
 
 def remove_namespace(tag):
     return tag.rpartition('}')[2]
@@ -248,7 +254,7 @@ class Translator(object):
             if not bases:
                 bases = [self._name('object')]
             name = node['name']
-            assert node['type'] == 0
+            # node['type'] contains `abstract` and `final` modifiers, which we ignore
             yield ast.ClassDef(
                 name=node['name'],
                 bases=bases,
@@ -437,7 +443,8 @@ class Translator(object):
             keys, values = [], []
             for item in node['items']:
                 assert not item['byRef']
-                keys.append(self._translate_expression(item['key']))
+                if item['key'] is not None: # key is None for a simple [x, y, z] array
+                    keys.append(self._translate_expression(item['key']))
                 values.append(self._translate_expression(item['value']))
             if any(keys):
                 return ast.Dict(keys=keys, values=values)
@@ -511,10 +518,17 @@ def main():
                                  help='Dump PHP AST instead of translating to Python')
     argument_parser.add_argument('--python-ast', action='store_true',
                                  help='Dump Python AST instead of code')
+    argument_parser.add_argument('--input-file', help='Read the given file instead of stdin')
     command_line_args = argument_parser.parse_args()
 
+    if command_line_args.input_file:
+        input_stream = open(command_line_args.input_file)
+    else:
+        input_stream = sys.stdin
+
     parser = XmlPhpParseTreeReader()
-    statements = parser.parse_php(sys.stdin)
+    statements = parser.parse_php(input_stream)
+    input_stream.close()
 
     if command_line_args.php_ast:
         formatter = PhpAstPrettyFormatter()
