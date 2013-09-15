@@ -7,12 +7,11 @@ import itertools
 import logging
 import os
 import pprint
+import string
 import subprocess
 import sys
 import types
 from xml.etree import ElementTree
-
-import IPython
 
 import unparse
 
@@ -227,7 +226,16 @@ class Translator(object):
         elif node.type == 'Expr_Exit':
             yield ast.Expr(self._method_call(self._name('sys'), 'exit', []))
         elif node.type == 'Stmt_Use':
-            yield ast.Expr(ast.Str('Ignoring use: %s' % '.'.join(node['uses'][0]['name']['parts'])))
+            path_parts = node['uses'][0]['name']['parts']
+            if path_parts[0] == 'tt':
+                path_parts[0] = 'thumbtack'
+            package_path = '.'.join(path_parts[:-1])
+            module_name = path_parts[-1]
+            yield ast.ImportFrom(
+                names=[ast.alias(name=module_name, asname=None)],
+                module=package_path,
+                level=0,
+            )
         elif node.type == 'Stmt_Echo':
             yield ast.Print(
                 dest=None,
