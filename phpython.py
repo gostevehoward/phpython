@@ -360,6 +360,8 @@ class Translator(object):
                     body=self.translate_statements(case_node['stmts']),
                     orelse=[],
                 )
+        elif node.type == 'Stmt_InlineHTML':
+            yield ast.Str('INLINE HTML: ' + node['value'])
         else:
             yield ast.Expr(self._translate_expression(node))
 
@@ -392,9 +394,12 @@ class Translator(object):
         'Expr_Identical': ast.Eq(),
         'Expr_NotIdentical': ast.NotEq(),
         'Expr_Equal': ast.Eq(),
+        'Expr_Greater': ast.Gt(),
+        'Expr_SmallerOrEqual': ast.LtE(),
     }
 
     BOOLEAN_OPERATIONS = {
+        'Expr_BooleanAnd': ast.And(),
         'Expr_BooleanOr': ast.Or(),
     }
 
@@ -433,6 +438,9 @@ class Translator(object):
             return self._name(node['name'])
         elif node.type == 'Expr_PropertyFetch':
             return ast.Attribute(value=self._translate_expression(node['var']), attr=node['name'])
+        elif node.type == 'Expr_StaticPropertyFetch':
+            # class can be "self" in PHP, which happens to work in Python, but this is a bit shaky
+            return ast.Attribute(value=self._build_lookup(node['class']), attr=node['name'])
         elif node.type == 'Expr_StaticCall':
             return self._method_call(
                 self._build_lookup(node['class']),
@@ -476,7 +484,6 @@ class Translator(object):
         elif node.type == 'Expr_BooleanNot':
             return ast.UnaryOp(op=ast.Not(), operand=self._translate_expression(node['expr']))
         else:
-            #raise ValueError("don't know how to handle %r" % node.type)
             logging.warn("don't know how to handle %r" % node.type)
             return ast.Str('unknown %r' % node.type)
 
