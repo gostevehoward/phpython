@@ -1,3 +1,6 @@
+# from Tools/parser/unparse.py in the Python source tree
+# licensed under PSF license - http://docs.python.org/2/license.html
+
 "Usage: unparse.py <path to source file>"
 import sys
 import ast
