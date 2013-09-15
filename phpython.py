@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
+import argparse
 import ast
 import contextlib
 import itertools
+import logging
 import os
 import pprint
 import subprocess
@@ -96,7 +98,7 @@ class XmlPhpParseTreeReader(object):
         xml_root = ElementTree.fromstring(xml)
         return self.parse_tree(xml_root)
 
-class PrettyFormatter(object):
+class PhpAstPrettyFormatter(object):
     def __init__(self):
         self._indent_level = 0
         self._accumulator = []
@@ -306,7 +308,7 @@ class Translator(object):
             )
         elif node.type == 'Stmt_Break':
             if node['num']: # TODO
-                print 'WARNING: break with number!'
+                logging.warn('break with number!')
             yield ast.Break()
         elif node.type == 'Expr_Assign':
             yield ast.Assign(
@@ -460,7 +462,7 @@ class Translator(object):
             return ast.UnaryOp(op=ast.Not(), operand=self._translate_expression(node['expr']))
         else:
             #raise ValueError("don't know how to handle %r" % node.type)
-            print "don't know how to handle %r" % node.type
+            logging.warn("don't know how to handle %r" % node.type)
             return ast.Str('unknown %r' % node.type)
 
     def _translate_scalar(self, node):
@@ -488,25 +490,37 @@ class Translator(object):
                     sum_ast = ast.BinOp(left=sum_ast, op=ast.Add(), right=expression)
             return sum_ast
         else:
-            print "don't know how to handle %r" % node.type
+            logging.warn("don't know how to handle %r" % node.type)
             return ast.Str('unknown scalar %r' % node.type)
 
 def main():
-    parser = XmlPhpParseTreeReader()
-    with open(sys.argv[1]) as stream:
-        statements = parser.parse_php(stream)
+    logging.basicConfig(level=logging.INFO)
 
-    formatter = PrettyFormatter()
-    print formatter.pretty_format(statements)
-    print '----'
+    argument_parser = argparse.ArgumentParser(
+        description='Translate PHP code from stdin to Python on stdout',
+    )
+    argument_parser.add_argument('--php-ast', action='store_true',
+                                 help='Dump PHP AST instead of translating to Python')
+    argument_parser.add_argument('--python-ast', action='store_true',
+                                 help='Dump Python AST instead of code')
+    command_line_args = argument_parser.parse_args()
+
+    parser = XmlPhpParseTreeReader()
+    statements = parser.parse_php(sys.stdin)
+
+    if command_line_args.php_ast:
+        formatter = PhpAstPrettyFormatter()
+        print formatter.pretty_format(statements)
+        return
 
     translator = Translator()
     translated_statements = translator.translate_statements(statements)
     module = ast.Module(body=translated_statements)
-    print ast.dump(module)
-    print '----'
-    unparse.Unparser(module)
-    print
+
+    if command_line_args.python_ast:
+        print ast.dump(module)
+    else:
+        unparse.Unparser(module)
 
 if __name__ == '__main__':
     main()
