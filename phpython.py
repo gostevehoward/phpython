@@ -294,11 +294,18 @@ class Translator(object):
             yield ast.Return(value=self._translate_expression(node['expr']))
         elif node.type == 'Stmt_If':
             else_body = []
-            for if_node in node['elseifs']:
-                assert False # TODO
             if node['else']:
                 assert node['else'].type == 'Stmt_Else'
-                else_body.extend(self.translate_statements(node['else']['stmts']))
+                else_body = self.translate_statements(node['else']['stmts'])
+            for if_node in node['elseifs']:
+                assert if_node.type == 'Stmt_ElseIf'
+                else_body = [
+                    ast.If(
+                        test=self._translate_expression(if_node['cond']),
+                        body=self.translate_statements(if_node['stmts']),
+                        orelse=else_body,
+                    )
+                ]
             yield ast.If(
                 test=self._translate_expression(node['cond']),
                 body=self.translate_statements(node['stmts']),
