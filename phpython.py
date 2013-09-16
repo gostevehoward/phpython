@@ -324,6 +324,22 @@ class Translator(object):
                 body=self.translate_statements(node['stmts']),
                 orelse=[],
             )
+        elif node.type == 'Stmt_For':
+            # unpack `for` loops into `while` loops in Python
+            # (stmts, init, cond, loop)
+            assert len(node['cond']) == 1, 'for loop with multiple condition expressions'
+            for statement in self.translate_statements(node['init']):
+                yield statement
+            yield ast.While(
+                test=self._translate_expression(node['cond'][0]),
+                body=(
+                    list(self.translate_statements(node['stmts'])) +
+                    list(self.translate_statements(node['loop']))
+                ),
+                orelse=[],
+            )
+        elif node.type == 'Stmt_Continue':
+            yield ast.Continue()
         elif node.type == 'Stmt_Break':
             if node['num']: # TODO
                 logging.warn('break with number!')
@@ -338,6 +354,12 @@ class Translator(object):
                 target=self._translate_expression(node['var']),
                 op=ast.Add(),
                 value=self._translate_expression(node['expr']),
+            )
+        elif node.type == 'Expr_PostInc':
+            yield ast.AugAssign(
+                target=self._translate_expression(node['var']),
+                op=ast.Add(),
+                value=ast.Num(1),
             )
         elif node.type == 'Stmt_Throw':
             yield ast.Raise(
@@ -433,6 +455,11 @@ class Translator(object):
         'Expr_BooleanOr': ast.Or(),
     }
 
+    UNARY_OPERATIONS = {
+        'Expr_BitwiseNot': ast.Invert(),
+        'Expr_UnaryMinus': ast.USub(),
+    }
+
     def _translate_expression(self, node):
         if node.type in self.BINARY_OPERATIONS:
             return ast.BinOp(
@@ -453,6 +480,11 @@ class Translator(object):
                     self._translate_expression(node['left']),
                     self._translate_expression(node['right']),
                 ],
+            )
+        elif node.type in self.UNARY_OPERATIONS:
+            return ast.UnaryOp(
+                op=self.UNARY_OPERATIONS[node.type],
+                operand=self._translate_expression(node['expr']),
             )
         elif node.type == 'Expr_New':
             return self._parse_call(node, 'class')
@@ -529,6 +561,17 @@ class Translator(object):
             return ast.IfExp(test=test, body=body, orelse=self._translate_expression(node['else']))
         elif node.type == 'Expr_BooleanNot':
             return ast.UnaryOp(op=ast.Not(), operand=self._translate_expression(node['expr']))
+        elif node.type == 'Expr_Instanceof':
+            return ast.Call(
+                func=self._name('instanceof'),
+                args=[
+                    self._translate_expression(node['expr']),
+                    self._translate_expression(node['class']),
+                ],
+                keywords=[],
+                starargs=None,
+                kwargs=None,
+            )
         else:
             logging.warn("don't know how to handle %r" % node.type)
             return ast.Str('unknown %r' % node.type)
