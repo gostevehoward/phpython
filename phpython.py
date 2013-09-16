@@ -166,6 +166,7 @@ class Translator(object):
         return ast.Name(id=name)
 
     def _method_call(self, object_expression, function_name, args):
+        assert isinstance(function_name, basestring)
         return ast.Call(
             func=ast.Attribute(
                 value=object_expression,
@@ -471,7 +472,18 @@ class Translator(object):
         elif node.type == 'Expr_Variable':
             return self._name(node['name'])
         elif node.type == 'Expr_PropertyFetch':
-            return ast.Attribute(value=self._translate_expression(node['var']), attr=node['name'])
+            fetch_on_variable = self._translate_expression(node['var'])
+            if isinstance(node['name'], basestring):
+                return ast.Attribute(value=fetch_on_variable, attr=node['name'])
+            else:
+                # php lets you do `$foo->$bar`; we need to emit a getattr for that
+                return ast.Call(
+                    func=self._name('getattr'),
+                    args=[fetch_on_variable, self._translate_expression(node['name'])],
+                    keywords=[],
+                    starargs=None,
+                    kwargs=None,
+                )
         elif node.type == 'Expr_StaticPropertyFetch':
             # class can be "self" in PHP, which happens to work in Python, but this is a bit shaky
             return ast.Attribute(value=self._translate_expression(node['class']), attr=node['name'])
