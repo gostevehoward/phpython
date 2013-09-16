@@ -392,16 +392,29 @@ class Translator(object):
 
     BINARY_OPERATIONS = {
         'Expr_Concat': ast.Add(),
+
+        'Expr_BitwiseAnd': ast.BitAnd(),
         'Expr_BitwiseOr': ast.BitOr(),
+        'Expr_BitwiseXor': ast.BitXor(),
+
         'Expr_Plus': ast.Add(),
         'Expr_Minus': ast.Sub(),
+        'Expr_Mul': ast.Mult(),
+        'Expr_Div': ast.FloorDiv(),
+        'Expr_Mod': ast.Mod(),
+        'Expr_Pow': ast.Pow(),
+        'Expr_ShiftLeft': ast.LShift(),
+        'Expr_ShiftRight': ast.RShift(),
     }
 
     COMPARE_OPERATIONS = {
         'Expr_Identical': ast.Eq(),
         'Expr_NotIdentical': ast.NotEq(),
         'Expr_Equal': ast.Eq(),
+        'Expr_NotEqual': ast.NotEq(),
         'Expr_Greater': ast.Gt(),
+        'Expr_GreaterOrEqual': ast.GtE(),
+        'Expr_Smaller': ast.Lt(),
         'Expr_SmallerOrEqual': ast.LtE(),
     }
 
