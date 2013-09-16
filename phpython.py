@@ -165,18 +165,18 @@ class Translator(object):
             name = 'self'
         return ast.Name(id=name)
 
-    def _method_call(self, object_expression, function_name, args):
-        assert isinstance(function_name, basestring)
+    def _call(self, callable_expression, arguments):
         return ast.Call(
-            func=ast.Attribute(
-                value=object_expression,
-                attr=function_name,
-            ),
-            args=args,
+            func=callable_expression,
+            args=arguments,
             keywords=[],
             starargs=None,
             kwargs=None,
         )
+
+    def _method_call(self, object_expression, function_name, args):
+        assert isinstance(function_name, basestring)
+        return self._call(ast.Attribute(value=object_expression, attr=function_name), args)
 
     def translate_statements(self, statements):
         if statements:
@@ -349,7 +349,7 @@ class Translator(object):
                 targets=[self._translate_expression(node['var'])],
                 value=self._translate_expression(node['expr']),
             )
-        elif node.type == 'Expr_AssignConcat':
+        elif node.type in ('Expr_AssignConcat', 'Expr_AssignPlus'):
             yield ast.AugAssign(
                 target=self._translate_expression(node['var']),
                 op=ast.Add(),
@@ -414,13 +414,20 @@ class Translator(object):
 
     def _parse_call(self, node, name_tag):
         callable_expression = self._translate_expression(node[name_tag])
-        return ast.Call(
-            func=callable_expression,
-            args=self._parse_arguments(node['args']),
-            keywords=[],
-            starargs=None,
-            kwargs=None,
+        return self._call(callable_expression, self._parse_arguments(node['args']))
+
+    def _is_getattr_call(self, ast_item):
+        return (
+            isinstance(ast_item, ast.Call) and
+            isinstance(ast_item.func, ast.Name) and
+            ast_item.func.id == 'getattr'
         )
+
+    def _convert_name_to_string(self, ast_item):
+        if isinstance(ast_item, ast.Name):
+            return ast.Str(ast_item.id)
+        else:
+            return ast_item
 
     BINARY_OPERATIONS = {
         'Expr_Concat': ast.Add(),
@@ -509,12 +516,9 @@ class Translator(object):
                 return ast.Attribute(value=fetch_on_variable, attr=node['name'])
             else:
                 # php lets you do `$foo->$bar`; we need to emit a getattr for that
-                return ast.Call(
-                    func=self._name('getattr'),
-                    args=[fetch_on_variable, self._translate_expression(node['name'])],
-                    keywords=[],
-                    starargs=None,
-                    kwargs=None,
+                return self._call(
+                    self._name('getattr'),
+                    [fetch_on_variable, self._translate_expression(node['name'])],
                 )
         elif node.type == 'Expr_StaticPropertyFetch':
             # class can be "self" in PHP, which happens to work in Python, but this is a bit shaky
@@ -562,16 +566,37 @@ class Translator(object):
         elif node.type == 'Expr_BooleanNot':
             return ast.UnaryOp(op=ast.Not(), operand=self._translate_expression(node['expr']))
         elif node.type == 'Expr_Instanceof':
-            return ast.Call(
-                func=self._name('instanceof'),
-                args=[
+            return self._call(
+                self._name('instanceof'),
+                [
                     self._translate_expression(node['expr']),
                     self._translate_expression(node['class']),
                 ],
-                keywords=[],
-                starargs=None,
-                kwargs=None,
             )
+        elif node.type == 'Expr_Isset':
+            for var_to_check in node['vars']:
+                expression = self._translate_expression(var_to_check)
+                if isinstance(expression, ast.Attribute):
+                    # translate `isset($foo->bar)` into `hasattr(foo, 'bar')`
+                    return self._call(
+                        self._name('hasattr'),
+                        [expression.value, self._convert_name_to_string(attribute)],
+                    )
+                elif self._is_getattr_call(expression):
+                    # translate `isset($foo->$bar)` becomes `hasattr(foo, bar)`
+                    return self._call(
+                        self._name('hasattr'),
+                        [expression.args[0], expression.args[1]],
+                    )
+                elif isinstance(expression, ast.Subscript):
+                    # translate `isset($foo[$bar])` into `bar in foo`
+                    return ast.Compare(
+                        left=expression.slice,
+                        ops=[ast.In()],
+                        comparators=[expression.value],
+                    )
+                else:
+                    assert False, 'unknown isset: %s (%s)' % (expression, var_to_check.dump())
         else:
             logging.warn("don't know how to handle %r" % node.type)
             return ast.Str('unknown %r' % node.type)
