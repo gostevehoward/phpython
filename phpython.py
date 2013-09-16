@@ -165,13 +165,6 @@ class Translator(object):
             name = 'self'
         return ast.Name(id=name)
 
-    def _build_lookup(self, name):
-        assert name.type in ('Name', 'Name_FullyQualified')
-        expression = self._name(name['parts'][0])
-        for part in name['parts'][1:]:
-            expression = ast.Attribute(value=expression, attr=part)
-        return expression
-
     def _method_call(self, object_expression, function_name, args):
         return ast.Call(
             func=ast.Attribute(
@@ -223,7 +216,7 @@ class Translator(object):
             for catch_node in node['catches']:
                 except_handlers.append(
                     ast.ExceptHandler(
-                        type=self._build_lookup(catch_node['type']),
+                        type=self._translate_expression(catch_node['type']),
                         name=self._name(catch_node['var']),
                         body=self.translate_statements(catch_node['stmts']),
                     ),
@@ -249,8 +242,8 @@ class Translator(object):
                 nl=True,
             )
         elif node.type == 'Stmt_Class':
-            bases = [self._build_lookup(node['extends'])] if node['extends'] else []
-            bases.extend([self._build_lookup(child) for child in node['implements']])
+            bases = [self._translate_expression(node['extends'])] if node['extends'] else []
+            bases.extend([self._translate_expression(child) for child in node['implements']])
             if not bases:
                 bases = [self._name('object')]
             name = node['name']
@@ -263,7 +256,7 @@ class Translator(object):
             )
         elif node.type == 'Stmt_Interface':
             # TODO: combine with class
-            bases = [self._build_lookup(child) for child in node['extends']]
+            bases = [self._translate_expression(child) for child in node['extends']]
             if not bases:
                 bases = [self._name('object')]
             yield ast.ClassDef(
@@ -291,13 +284,16 @@ class Translator(object):
                 decorator_list=[],
             )
         elif node.type == 'Stmt_Return':
-            yield ast.Return(value=self._translate_expression(node['expr']))
+            if node['expr'] is None:
+                yield ast.Return(value=None) # just `return`
+            else:
+                yield ast.Return(value=self._translate_expression(node['expr']))
         elif node.type == 'Stmt_If':
             else_body = []
             if node['else']:
                 assert node['else'].type == 'Stmt_Else'
                 else_body = self.translate_statements(node['else']['stmts'])
-            for if_node in node['elseifs']:
+            for if_node in reversed(node['elseifs']):
                 assert if_node.type == 'Stmt_ElseIf'
                 else_body = [
                     ast.If(
@@ -355,18 +351,31 @@ class Translator(object):
                     value=self._translate_expression(const_node['value']),
                 )
         elif node.type == 'Stmt_Switch':
-            value = self._translate_expression(node['cond'])
-            for case_node in node['cases']:
-                # TODO: use elses properly
-                yield ast.If(
-                    test=ast.Compare(
-                        left=value,
-                        ops=[ast.Eq()],
-                        comparators=[self._translate_expression(case_node['cond'])],
-                    ),
-                    body=self.translate_statements(case_node['stmts']),
-                    orelse=[],
-                )
+            switch_value = self._translate_expression(node['cond'])
+            # assume the switch doesn't rely on fall-through and translate to if-elif-else
+            statements = []
+            for case_node in reversed(node['cases']):
+                case_body = self.translate_statements(case_node['stmts'])
+                if case_node['cond'] is None:
+                    # `default` -- must be the last case
+                    assert not statements, (
+                        'default must be the last case in a switch: ' + node.dump()
+                    )
+                    statements = case_body
+                else:
+                    statements = [
+                        ast.If(
+                            test=ast.Compare(
+                                left=switch_value,
+                                ops=[ast.Eq()],
+                                comparators=[self._translate_expression(case_node['cond'])],
+                            ),
+                            body=case_body,
+                            orelse=statements,
+                        )
+                    ]
+            for statement in statements:
+                yield statement
         elif node.type == 'Stmt_InlineHTML':
             yield ast.Str('INLINE HTML: ' + node['value'])
         else:
@@ -381,7 +390,7 @@ class Translator(object):
         return arguments
 
     def _parse_call(self, node, name_tag):
-        callable_expression = self._build_lookup(node[name_tag])
+        callable_expression = self._translate_expression(node[name_tag])
         return ast.Call(
             func=callable_expression,
             args=self._parse_arguments(node['args']),
@@ -454,16 +463,21 @@ class Translator(object):
             target = self._translate_expression(node['var'])
             name = node['name']
             return self._method_call(target, name, self._parse_arguments(node['args']))
+        elif node.type in ('Name', 'Name_FullyQualified'):
+            expression = self._name(node['parts'][0])
+            for part in node['parts'][1:]:
+                expression = ast.Attribute(value=expression, attr=part)
+            return expression
         elif node.type == 'Expr_Variable':
             return self._name(node['name'])
         elif node.type == 'Expr_PropertyFetch':
             return ast.Attribute(value=self._translate_expression(node['var']), attr=node['name'])
         elif node.type == 'Expr_StaticPropertyFetch':
             # class can be "self" in PHP, which happens to work in Python, but this is a bit shaky
-            return ast.Attribute(value=self._build_lookup(node['class']), attr=node['name'])
+            return ast.Attribute(value=self._translate_expression(node['class']), attr=node['name'])
         elif node.type == 'Expr_StaticCall':
             return self._method_call(
-                self._build_lookup(node['class']),
+                self._translate_expression(node['class']),
                 node['name'],
                 self._parse_arguments(node['args']),
             )
@@ -488,10 +502,10 @@ class Translator(object):
                 slice=index,
             )
         elif node.type == 'Expr_ConstFetch':
-            return self._build_lookup(node['name'])
+            return self._translate_expression(node['name'])
         elif node.type == 'Expr_ClassConstFetch':
             return ast.Attribute(
-                value=self._build_lookup(node['class']),
+                value=self._translate_expression(node['class']),
                 attr=node['name'],
             )
         elif node.type == 'Expr_Ternary':
