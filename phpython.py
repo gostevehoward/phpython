@@ -399,6 +399,8 @@ class Translator(object):
                     ]
             for statement in statements:
                 yield statement
+        elif node.type == 'Stmt_Unset':
+            yield ast.Delete(targets=[self._translate_expression(var) for var in node['vars']])
         elif node.type == 'Stmt_InlineHTML':
             yield ast.Str('INLINE HTML: ' + node['value'])
         else:
